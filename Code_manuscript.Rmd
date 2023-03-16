@@ -1,0 +1,941 @@
+---
+title: "RCode - MHC class II genotype does not contribute towards the chemical encoding of heterozygosity and relatedness in a wild vertebrate population"
+author: "J. Tebbe"
+date: "`r format(Sys.time(), '%d/%m/%y')`"
+output: pdf_document
+bibliography: r-packages.bib
+nocite:
+  -'@*'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Packages
+
+```{r message=F, warning=F}
+
+if (!require("magrittr", quietly = TRUE)) {
+install.packages("magrittr")
+library(magrittr)
+} else {
+library(magrittr) # pipe operators
+}
+
+if (!require("tidyverse", quietly = TRUE)) {
+install.packages("tidyverse")
+library(tidyverse)
+} else {
+library(tidyverse) # package collection for easy and pretty data science with R
+}
+
+
+if (!require("phyloseq", quietly = TRUE)) {
+if (!require("BiocManager", quietly = TRUE)) {
+install.packages("BiocManager")
+}
+BiocManager::install(pkgs = "phyloseq")
+library(phyloseq) # phyloseq objects
+} else {
+library(phyloseq) # phyloseq objects
+}
+
+if (!require("GCalignR", quietly = TRUE)) {
+install.packages("GCalignR")
+library(GCalignR)
+} else {
+library(GCalignR) # handling/aligning chromatograms
+}
+
+if (!require("inbreedR", quietly = TRUE)) {
+install.packages("inbreedR")
+library(inbreedR)
+} else {
+library(inbreedR) # population genetic analyses
+}
+
+if (!require("vegan", quietly = TRUE)) {
+install.packages("vegan")
+library(vegan)
+} else {
+library(vegan) # statistical tools
+}
+
+if (!require("ggpubr", quietly = TRUE)) {
+install.packages("ggpubr")
+library(ggpubr)
+} else {
+library(ggpubr) # ggplot grid and plot alignment functions
+}
+
+if (!require("ape", quietly = TRUE)) {
+install.packages("ape")
+library(ape)
+} else {
+library(ape) # handling phylogenetic tree data
+}
+
+if (!require("performance", quietly = TRUE)) {
+install.packages("performance")
+library(performance)
+} else {
+library(performance) # tools for models
+}
+
+if (!require("MuMIn", quietly = TRUE)) {
+install.packages("MuMIn")
+library(MuMIn)
+} else {
+library(MuMIn) # tools for models
+}
+
+
+# archived package as is dependend on `fts` package
+# for execution of the code, users need to manually install Rtools to be able
+# to install packages `Demerelate` and `fts`
+
+library(fts)
+
+library(Demerelate)
+
+```
+
+### Packages for relatedness calculations
+
+Not supported on newer versions of R, to execute code you must have Rtools 
+installed on your machine in order to load older version of the `Demerelate` 
+and `fts` package.
+
+```{r}
+
+if (!require("remotes", quietly = TRUE)) {
+install.packages("remotes")
+library(remotes)
+} else {
+library(remotes) # tools for models
+}
+
+if (!require("fts", quietly = TRUE)) {
+install_version("fts", "0.9.9.2")
+  library(fts)
+} else {
+library(fts) # tools for models
+}
+
+if (!require("Demerelate", quietly = TRUE)) {
+install_version("Demerelate", "0.9.9.2")
+  library(Demerelate)
+} else {
+library(Demerelate) # tools for models
+}
+
+
+```
+
+
+
+## Subset scent data to correlate same individuals
+
+```{r}
+
+## read in meta data
+meta <- read.table(file = "data/arga_metadata.txt", sep = "\t") %>%
+  `colnames<-`(unlist(.[1,])) %>%
+  .[-1,]
+
+
+## normalise area and return a data frame
+scent <- norm_peaks(aligned_peak_data, 
+                    conc_col_name = "area",
+                    rt_col_name = "time",
+                    out = "data.frame") 
+## common transformation for abundance data to reduce the extent of mean-variance trends
+scent <- log(scent + 1) 
+
+n_scnt <- rownames(scent)
+
+keep_i <- match(meta$id, n_scnt)
+
+scent %<>% 
+  .[keep_i, ] %>%
+  `rownames<-`(meta$real_id)
+
+
+## NMDS with reduced data
+## GCalignR contains factors for the chemical dataset
+data("peak_factors")
+peak_factors <- peak_factors[match(meta$id, rownames(peak_factors)),] %>%
+  `rownames<-`(meta$real_id)
+
+## keep order of rows consistent
+scent <- scent[match(rownames(peak_factors),rownames(scent)),] 
+## NMDS using Bray-Curtis dissimilarities
+scent_nmds.obj <- vegan::metaMDS(comm = scent, distance = "bray")
+## get x and y coordinates
+scent_nmds <- as.data.frame(scent_nmds.obj[["points"]])  
+## add the colony as a factor to each sample
+scent_nmds <- cbind(scent_nmds,colony = peak_factors[["colony"]])
+## quick plotting
+scent_plot <- ggplot(data = scent_nmds,aes(MDS1,MDS2,color = colony)) +
+  geom_point() + 
+  theme_void() + 
+  scale_color_manual(values = c("blue","red")) +
+  theme(panel.background = element_rect(colour = "black", 
+                                        size   = 1,
+                                        fill   = NA), 
+        aspect.ratio    =  1, 
+        legend.position = "none")
+scent_plot
+```
+
+## Calculate MHC heterozygosity relatedness between individuals
+
+```{r message = FALSE}
+
+## read in mhc genotype data
+mhc_het_dat <- read.table("data/clone_mhc_het.txt") 
+## restructure `mhc_het_dat`to fit `Demerelate()::inputdata)
+## id and colony as factors; alleles as integers or numeric
+## otherwise `rxy`cannot handle computations
+mhc_het_dat %<>%
+  rownames_to_column(., var = "id") %>%
+  # mutate(., a1 = str_pad(a1, 2, pad = "0")) %>% 
+  # mutate(., a2 = str_pad(a2, 2, pad = "0")) %>%
+  mutate(., colony = as.factor(rep("col", 56))) %>% 
+  mutate(., id = as.factor(id)) %>%   
+  .[,-4] %>%
+  relocate(., colony, .before = a1)
+  ## order mhc_het_dat$id after meta$real_id
+  ## so data is consistently ordered same in all data.frames
+
+## get matching indeces  
+id_index <- match(meta$real_id, mhc_het_dat$id)
+## sort correspondingly
+mhc_het_dat %<>% .[id_index,]
+
+## calculate relatedness after Queller & Goodnight
+mhc_relatedness_res <- Demerelate(inputdata = mhc_het_dat,
+                                  value = "rxy",
+                                  object = T,
+                                  NA.rm = F, 
+                                  Fis = F)
+
+
+mhc_relatedness <- unlist(mhc_relatedness_res$Empirical_Relatedness)
+
+## fill distant matrix / make sure that it follows same systematics as previous distance matrices
+## create empty matrix with equal rows and cols similar to sample size of indidivuals
+relate_mat_mhc <- matrix(nrow = 56, ncol = 56)
+## fill distance matrix row wise, thus fill upper.tri
+relate_mat_mhc[upper.tri(relate_mat_mhc)] <- mhc_relatedness
+## transpose to keep consistency with other distance matrices
+relate_mat_mhc <- t(relate_mat_mhc)
+relate_mat_mhc %<>% `colnames<-`(meta$real_id) %>% `rownames<-`(meta$real_id)
+
+## vectorize again to identify whether relatedness pairs were consistent in the first place
+a <- relate_mat_mhc %>% as.vector() %>% na.omit()
+
+```
+
+### Create vectorized distance measurements for scent data
+
+```{r}
+# bray-curtis distance measurement on scent profiles
+scent_dist <- vegdist(scent) %>% as.matrix()
+scent_dist[upper.tri(scent_dist, diag = T)] <- NA
+b <- scent_dist %>% as.vector() %>% na.omit()
+
+```
+
+### Generate UniFrac distances from MHC DQB II individual genotypes
+
+```{r}
+# handle genotypes as otu table
+phylo_mat <- read.table("data/phyloseq-mat.txt") %>% 
+  as.matrix()
+
+# make sample names consistent
+n <- match(meta$real_id, colnames(phylo_mat))
+
+phylo_mat %<>% .[, n] %>%
+  otu_table(., taxa_are_rows = T)
+
+# create phylogenetic tree from file
+phylo_tree <- ape::read.tree("data/unifrac_tree_p.nwk")
+
+# merge into Formal class phyloseq
+arga_phylseq <- merge_phyloseq(phylo_mat, phylo_tree)
+
+# create UniFrac as genetic diversity measurement for single locus data
+mhc_dqb2_ufrac <- UniFrac(arga_phylseq, weighted = F) %>%
+  # distances to distance matrix
+  as.matrix()
+
+# vectorize distances matrices
+mhc_dqb2_ufrac[upper.tri(mhc_dqb2_ufrac, diag = T)] <- NA
+c <- mhc_dqb2_ufrac %>% as.vector() %>% na.omit()
+```
+
+### Calculate identity disequilibirum g2
+
+```{r}
+msats_g2 <- read.table("data/msats_genotypes_inbreedR.txt", sep = "\t") %>%
+  convert_raw()
+
+g2 <- g2_microsats(msats_g2, nperm = 1000, nboot = 1000, CI = 0.95)
+
+plot(g2, main = "Microsatellites",
+     col = "cornflowerblue", cex.axis=0.85)
+```
+
+## Calculate microsatellite relatedness values
+
+### create `data.frame` in correspondence to `Demerelate` input format
+
+```{r echo = TRUE, results='hide'}
+
+# read in genotype data table
+msats_df <- read.table("data/msats_genotypes_inbreedR.txt", sep = "\t")
+
+
+# update data.frame with additional info
+# "delete" colony info, otherwise relatedness is only calculated for individuals
+# within their own colonies -> no complete pairwise comparison
+msats_df <- cbind(id = as.factor(rownames(msats_df)), 
+                  # colony = meta$colony, 
+                  colony = rep("col", 56),
+                  msats_df[1:56,]) %>%
+  # clear df from rownames/ only keep colnames/ variable names
+  `rownames<-`(NULL)
+
+msats_df[is.na(msats_df)] = 0
+
+str(msats_df)
+
+write.table(msats_df, file = "data/msats_genotypes_demerelate.txt", 
+            sep = "\t", 
+            row.names = F)
+
+```
+
+### Calculate relatedness of individuals based on Queller & Goodnight
+
+```{r echo=TRUE, results='hide', message=FALSE}
+
+relatedness_results <- Demerelate(inputdata = msats_df,
+                                  value = "rxy",
+                                  object = T,
+                                  NA.rm = F, 
+                                  Fis = F)
+
+```
+
+### Coerce output to a vector
+
+```{r}
+
+relatedness <- unlist(relatedness_results$Empirical_Relatedness)
+
+## fill distant matrix / make sure that it follows same systematics as previous distance matrices
+## create empty matrix with equal rows and cols similar to sample size of indidivuals
+relate_mat <- matrix(nrow = 56, ncol = 56)
+## fill distance matrix row wise, thus fill upper.tri
+relate_mat[upper.tri(relate_mat)] <- relatedness
+## transpose to keep consistency with other distance matrices
+relate_mat <- t(relate_mat)
+relate_mat %<>% `colnames<-`(meta$real_id) %>% `rownames<-`(meta$real_id)
+
+## vectorize again to identify whether relatedness pairs were consistent in the first place
+d <- relate_mat %>% as.vector() %>% na.omit()
+
+```
+
+## Analyse Odour and genetic association by MHC DQB II and neutral genomic background
+
+### Create data.frame to plot in `ggplot2`
+
+```{r}
+
+## substitute once tested correctly
+## scent_mds shall contain similarity values but `b` contains
+## dissimilarity values based on Bray-Curtis -> substracting
+## dissmilarities from 1 returns similarities
+
+model_rel.df <- cbind(mhc_rel = a, scent_mds = 1-b, ufrac = c, rel = d) %>% 
+  as.data.frame()
+
+```
+
+### Custom theme to make plot aesthetics consistent
+
+```{r}
+
+# custom theme to ease figure creation
+custom_theme <- ggplot2::theme_classic(base_size =20,
+                                       base_line_size = 1,
+                                       base_rect_size = 1) +
+  ggplot2::theme(
+    #c(top, right, bottom, left)
+    plot.margin = margin(5.5,6.5,8,5.5, "pt"),
+    panel.grid = element_blank(),
+    axis.text = element_text(color = "black"),
+    axis.title.x = element_text(vjust = -.75),
+    axis.title.y = element_text(vjust = +2),
+    axis.ticks = element_line(color = "black"),
+    aspect.ratio = 1,
+    legend.position = "none"
+  )
+
+```
+
+
+### Plot odour by mhc similarity
+
+```{r}
+# odour by mhc sim
+panel1.a <- ggplot(data = model_rel.df,
+       aes(x = ufrac, y = scent_mds)) +
+  geom_point(size = 3.5,
+             alpha = 0.25) +
+  # geom_smooth(method = "lm",
+  #             color = "orange") +
+  scale_x_continuous(name = "MHC Unifrac distance") +
+  scale_y_continuous(name = "Chemical similarity") +
+  # labs(tag = "A") +
+  custom_theme
+
+```
+
+### Plot odour by relatedness
+
+```{r}
+# odour by relatedness
+panel1.b <- ggplot(data = model_rel.df,
+       aes(x = rel, y = scent_mds)) +
+  geom_point(size = 3.5,
+             alpha = 0.25) +
+  # geom_smooth(method = "lm",
+  #             color = "orange") +
+  scale_x_continuous(name = "Relatedness") +
+  scale_y_continuous(name = "Chemical similarity") +
+  custom_theme
+```
+
+
+## Model odour relationship on MHC and neutral genetic background
+
+### Pool underlying data dependencies
+
+Create a function that generates pairwise variables in a systematic matter for
+pairwise comparisons
+
+```{r}
+
+# Function specification --------------------------------------------------
+
+## make into function, to create age, col and family ids for the pairs 
+## in similar manner
+
+# for function: row and col names need then to be the values to cross in the right
+# order
+
+# Code execution ----------------------------------------------------------
+create_pair_vars <-function(row_cross, col_cross, split_vars = F){
+  require(stringr)
+  
+  rc <- row_cross
+  cc <- col_cross
+  
+  # create empy matrix
+  # keep row and col names from existing distance matrices
+  
+  empty_mat <- matrix(nrow = length(rc), 
+                      ncol = length(cc)) %>%
+    `colnames<-`(cc) %>%
+    `rownames<-`(rc)
+  
+  # fill each matrix i,j-th cell with the crossing from their corresponding
+  # i-th rowname and j-th colname
+  for (i in 1:dim(empty_mat)[1]) {
+    for (j in 1:dim(empty_mat)[2]) {
+      
+      empty_mat[i,j] <- paste0(rc[i], "/", cc[j])
+      
+    } # end j
+  } # end i
+  
+  
+  # delete `upper.tri()` of `empty_mat` to resemble structure of the other
+  # distance matrices in use
+  
+  empty_mat[upper.tri(empty_mat, diag = T)] <- NA
+  pair_vars <- empty_mat %>% as.vector() %>% na.omit()
+  
+  # split `pair_vars` if needed
+  if (split_vars == T) {
+    
+    pair_vars1 <- sapply(pair_vars, 
+                         function(x){
+                           str_split(x, pattern = "/")[[1]][1]
+                         })
+    
+    pair_vars2 <- sapply(pair_vars, 
+                         function(x){
+                           str_split(x, pattern = "/")[[1]][2]
+                         })
+    
+    pair_vars_split <- list(pair_variable1 = pair_vars1, 
+                            pair_variable2 = pair_vars2)
+    
+    return(pair_vars_split)
+    
+  } else {
+    return(pair_vars)
+  }
+  
+} #end create_pair_vars
+```
+
+Helper function to combine double entries
+
+```{r}
+## for x, overwrite specified replacer with specified value
+f <- function(x, replacer, overwrite){
+  if (x == replacer) {
+    x <- overwrite
+  } else {
+    x <- x
+  }
+}
+```
+
+Transform model variables
+
+```{r}
+
+agePaired <- create_pair_vars(row_cross = meta$maturity,
+                              col_cross = meta$maturity) %>%
+  sapply(., f, "P/M", "M/P")
+
+colonyPaired <- create_pair_vars(row_cross = meta$colony,
+                                 col_cross = meta$colony) %>%
+  sapply(., f, "FWB/SSB", "SSB/FWB")
+
+colonyID1 <- create_pair_vars(row_cross = meta$colony,
+                              col_cross = meta$colony,
+                              split_vars = T)[1] %>% 
+  unlist() %>% 
+  paste0("f", .) %>% 
+  as.vector()
+
+colonyID2 <- create_pair_vars(row_cross = meta$colony,
+                              col_cross = meta$colony,
+                              split_vars = T)[2] %>% 
+  unlist() %>%  
+  paste0("f", .) %>% 
+  as.vector()
+
+colonyBool <- ifelse(colonyID1 == colonyID2, 1, 0)
+
+familyPaired <- create_pair_vars(row_cross = meta$family,
+                                 col_cross = meta$family)
+
+familyID1 <- create_pair_vars(row_cross = meta$family,
+                              col_cross = meta$family,
+                              split_vars = T)[1] %>% 
+  unlist() %>% 
+  paste0("f", .) %>% 
+  as.vector()
+
+familyID2 <- create_pair_vars(row_cross = meta$family,
+                              col_cross = meta$family,
+                              split_vars = T)[2] %>% 
+  unlist() %>%  
+  paste0("f", .) %>% 
+  as.vector()
+
+pairID1 <- create_pair_vars(row_cross = meta$real_id,
+                            col_cross = meta$real_id,
+                            split_vars = T)[1] %>%
+  unlist() %>% 
+  as.vector()
+
+pairID2 <- create_pair_vars(row_cross = meta$real_id,
+                            col_cross = meta$real_id,
+                            split_vars = T)[2] %>%
+  unlist() %>% 
+  as.vector()
+
+familyBool <- ifelse(familyID1 == familyID2, 1, 0)
+
+```
+
+### Update data.frame with model variables
+
+```{r}
+
+model_rel.df <- data.frame(model_rel.df, 
+                      agePaired = as.factor(agePaired),
+                      colonyPaired = as.factor(colonyPaired),
+                      colonyBool = as.factor(colonyBool),
+                      familyPaired = as.factor(familyPaired),
+                      familyID1 = as.factor(familyID1),
+                      familyID2 = as.factor(familyID2), 
+                      familyBool = as.factor(familyBool),
+                      pairID1 = as.factor(pairID1),
+                      pairID2 = as.factor(pairID2))
+
+```
+
+### Color Chemical similarity by same or different beach
+
+'colonyBool' encodes whether individual from same colonies (SSB vs SSB and FWB vs FWB)
+are compared or from different colonies
+```{r eval=FALSE, include=FALSE}
+
+panel1.b2 <- ggplot(data = model_rel.df,
+                   aes(x = rel, y = scent_mds, shape = colonyBool,
+                       color = colonyBool)) +
+  geom_point(size = 3.5, 
+             alpha = 0.25) +
+  geom_smooth(method = "lm",
+              se = T) +
+  scale_color_manual(values = c("lightgrey", "orange")) +
+  scale_x_continuous(name = "Relatedness") +
+  scale_y_continuous(name = "Chemical similarity") +
+  custom_theme
+panel1.b2
+```
+
+
+### Chemical similarity models
+
+```{r}
+
+# mhc
+a1 <- lmerTest::lmer(scent_mds ~ ufrac + colonyBool + (1|familyBool) + 
+                       (1|pairID1) + (1|pairID2), 
+                     data = model_rel.df)
+# relatedness
+a2 <- lmerTest::lmer(scent_mds ~ rel + colonyBool + (1|familyBool) + (1|pairID1) + 
+                       (1|pairID2), 
+                     data = model_rel.df)
+# mhc & relatedness
+a3 <- lmerTest::lmer(scent_mds ~ rel + ufrac + colonyBool + (1|familyBool) + 
+                       (1|pairID1) + (1|pairID2), 
+                     data = model_rel.df)
+# no genetic effect
+a4 <- lmerTest::lmer(scent_mds ~ colonyBool + (1|familyBool) + (1|pairID1) + 
+                       (1|pairID2), 
+                     data = model_rel.df)
+
+# compare model performance scores
+compare_performance(a1, a2, a3, a4, rank = T) %>% 
+  arrange(Name)
+
+summary(a2)
+summary(a4)
+
+# if interested
+# check model performance by
+# check_model(a2)
+# 
+
+```
+
+Correlations of genetic main effects
+
+```{r}
+# correlation of ufrac and relatedness
+u_r_model1 <- lmerTest::lmer(ufrac ~ rel  + (1|pairID1) + (1|pairID2), 
+                             data = model_rel.df)
+summary(u_r_model1)
+
+u_r_model2 <- lmerTest::lmer(ufrac ~ rel  + (1|pairID1) + (1|pairID2) + (1|familyBool), 
+                             data = model_rel.df)
+summary(u_r_model2)
+
+compare_performance(u_r_model1, u_r_model2, rank = T)
+
+u_r_model3 <- lmerTest::lmer(ufrac ~ rel + colonyBool + (1|pairID1) + (1|pairID2) + (1|familyBool), 
+                             data = model_rel.df)
+summary(u_r_model3)
+
+compare_performance(u_r_model1, u_r_model2, u_r_model3, rank = T)
+
+summary(u_r_model2)# colony effect unsubstantial but family important!
+(aov_u_r <- anova(u_r_model2))
+
+```
+
+## Model relationship between chemical diversity and mhc plus msats diversity
+### update data frame with meta data
+Include information about MHC heterozygosity, sMLH from microsatellite data and 
+chemical diversity by number of compounds per individual
+
+```{r}
+
+scent.abs <- ifelse(scent != 0, 1, 0)
+compound_n <- apply(scent.abs, 1, sum)
+
+names(compound_n) == meta$real_id
+
+# read in heterzygosity information
+het_table <- read.table("data/arga_mhc_het.txt", sep = "\t")
+
+# keep names consistent
+match_het <- match(meta$real_id, rownames(het_table))
+het_table %<>% .[match_het,]
+
+# generate sMLH with microsatellite data
+# table is pre-prepped, thus rows correspond to same individuals in meta data
+smlh_res <- read.table("data/msats_genotypes_inbreedR.txt", sep = "\t") %>%
+  # convert to inbreedR format
+  convert_raw() %>%
+  # generate sMLH
+  sMLH()
+
+meta %<>% cbind(., compound_n = compound_n,
+                mhc_het = het_table$het,
+                smlh = smlh_res)
+
+meta %<>% mutate(
+  real_id = as.factor(real_id),
+  colony = as.factor(colony),
+  maturity = as.factor(maturity),
+  family = as.factor(family)
+)
+
+```
+
+### Compare chemical diversity models
+Correlate Chemical diversity per sample with their sMLH and MHC, respectively.
+Also accounting maturity and family as fixed and random effect.
+
+```{r}
+
+b1 <- lmerTest::lmer(compound_n ~ mhc_het + maturity + (1|family), 
+                     data = meta)
+
+b2 <- lmerTest::lmer(compound_n ~ smlh + maturity + (1|family), 
+                     data = meta)
+
+b3 <- lmerTest::lmer(compound_n ~ mhc_het + smlh + maturity + (1|family), 
+                     data = meta)
+
+b4 <- lmerTest::lmer(compound_n ~ maturity + (1|family), 
+                     data = meta)
+
+
+compare_performance(b1, b2, b3, b4, rank = T) %>% arrange(Name)
+
+summary(b2)
+```
+Correlate zygosity effects
+
+```{r}
+
+smlh_het_m1 <- lmerTest::lmer(smlh ~ mhc_het + (1|family), data = meta)
+summary(smlh_het_m1)
+
+# check performance for including colony as fixed effect, as well
+smlh_het_m2 <- lmerTest::lmer(smlh ~ mhc_het + colony + (1|family), data = meta)
+summary(smlh_het_m2)
+(aov <- anova(smlh_het_m2))
+
+compare_performance(smlh_het_m1, smlh_het_m2, rank = T)
+
+
+```
+
+### Plot chemical complexity by mhc heterozygosity
+
+
+```{r}
+
+panel2.a <- ggplot(data = meta, 
+                   aes(y = compound_n, 
+                       x = as.factor(mhc_het), 
+                       fill = as.factor(mhc_het),
+                       color = as.factor(mhc_het))) +
+  scale_fill_manual(values = c("darkgrey", "orange")) +
+  geom_boxplot(width = 0.4,
+               color = "black", 
+               size = 1) +
+  geom_jitter(height = 0.02,
+              width = 0.1, 
+              color = "black",
+              size = 3.5,
+             alpha = 0.25) +
+  scale_x_discrete(name = "MHC heterozygosity",
+                     breaks = c(0,1),
+                     labels = c("homozygous", "heterozygous")) +
+  scale_y_continuous(name = "Chemical diversity") +
+  custom_theme
+
+```
+
+
+### Plot chemical complexity by sMLH
+
+```{r}
+panel2.b <- ggplot(data = meta, 
+                   aes(y = compound_n, 
+                       x = smlh)) + 
+  geom_point(size = 3.5,
+             alpha = 0.25) +
+  geom_smooth(method = "lm", 
+              se = T, 
+              color = "orange") +
+  scale_x_continuous(name = "sMLH") +
+  scale_y_continuous(name = "Chemical diversity") +
+  scale_color_manual(name = "Senescence",
+    values = c("#E8B54D", "#000000"), 
+    labels = c("Mother", "Pup")) +
+  scale_fill_manual(name = "Senescence",
+    values = c("#E8B54D", "#000000"), 
+    labels = c("Mother", "Pup")) +
+  custom_theme
+
+``` 
+
+
+### PERMANOVA for individual genotypes and alleles respectively
+
+Create workable dataframe
+
+```{r}
+# create data frame containing of:
+  # individual substance count for every animal
+  # an animals individual genotype, represented by 0 and 1 for a given number
+  # of alleles (here ranging from 1 to 19)
+idv_allele <- t(phylo_mat) %>% 
+  # coerce to data.frame
+  as.data.frame() %>% 
+  # combine individual compound number with mhc genotype
+  cbind(., compound_n) %>% 
+  # rename columns
+  `colnames<-`(c(paste0("a",1:19), "compound_n"))
+```
+
+Run PERMANOVA on each allele
+
+```{r}
+# run permanova to associate individual alleles to compound complexity
+allele_permanova <- 
+  vegan::adonis2(compound_n ~ a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + 
+                   a11 + a12 + a13 + a14 + a15 + a16 + a17 + a18 + a19, 
+               data = idv_allele)
+# View results
+allele_permanova
+
+# give out p-values for each individual allele
+pvals <- allele_permanova[1:19,5]
+
+# correct p-values by fdr
+pvals_corrected <- p.adjust(pvals, method = "fdr") %>% as.data.frame()
+pvals_corrected
+```
+
+PERMANOVA for associated odour nmds profiles with genotypes
+
+
+```{r}
+# combine individuals alleles for each individual to genotype in same dataframe
+het_table %<>% mutate(gtype = as.factor(paste0(a1, "/", a2)))
+
+vegan::adonis2(scent ~ het_table$gtype)
+
+scent_nmds %<>% cbind(., gtype = as.factor(het_table$gtype))
+```
+
+Plot PERMANOVA results
+
+```{r}
+
+# create color palette for the plot
+clr <- c("#D55E00", "#0000ff", "#56B4E9", "#009E73","#000000", "#CC79A7", "#a4805c",
+         "turquoise", "#ed0c2e", "#8000ff", "#ffb700", "#ffff00", "#0a0c2e", "#db5e71") 
+
+# assign pch values for plotting
+shp <- c(17, 15, 16, 18) 
+
+color_shape_pairs <- crossing(clr,shp)
+
+shape_pair_df <- data.frame(fam = levels(scent_nmds$gtype), 
+                            color_shape_pairs[1:length(levels(scent_nmds$gtype)),])
+
+cross_ref <- match(scent_nmds$gtype, shape_pair_df$fam)
+
+shape_pair_df %<>% .[cross_ref,] 
+
+scent_nmds %<>%  cbind(., 
+                    shape_pair_df[,2:3])
+
+scent_nmds %<>% mutate(across(clr:shp, as.factor))
+
+ggplot(data = scent_nmds,aes(MDS1,MDS2, color = clr, shape = shp)) + 
+  geom_point(size = 4) +
+  scale_shape_manual(values = as.numeric(levels(scent_nmds$shp))) +
+  theme_void() + 
+  scale_color_manual(values = levels(as.factor(scent_nmds$clr))) +
+  annotate("text", x = 0.48, y = -0.75, label = "2D Stress: 0.2", size = 5) +
+  scale_x_continuous(name = "nMDS1") +
+  scale_y_continuous(name = "nMDS2") +
+  custom_theme +
+  theme(
+    legend.position = "none",
+    axis.ticks = element_blank(),
+    axis.text = element_blank()
+  )
+
+# save output
+ggsave(filename = "figures/genotype_pairs_nmds.png", 
+       width = 32, height = 16, 
+       units = "cm", dpi = 400)
+
+```
+### Create manuscript panel figure
+
+```{r, fig.height=29.7, fig.width=21}
+
+# tag is according to final manuscript structure
+panel1.a <- panel1.a + labs(tag = "(a)")
+panel1.b <- panel1.b + labs(tag = "(b)")
+panel2.b <- panel2.b + labs(tag = "(c)")
+panel2.a <- panel2.a + labs(tag = "(d)")
+
+
+# arrange figures in 2x2 grid and align horizontally and vertically
+panel_final <- ggpubr::ggarrange(panel1.a, panel1.b,
+                                panel2.b, panel2.a,
+                                nrow = 2, ncol = 2, align = "hv")
+# print
+panel_final
+
+
+# save high resolution
+ggsave(filename = "figures/final_panel.png",
+       panel_final,dpi = 400, 
+       width = 33.97, height = 31.04, 
+       units = "cm",
+       bg = "white"
+       )
+
+
+
+```
+
+## Session information
+
+```{r}
+sessionInfo()
+```
+
+## References
+
+```{r eval=FALSE, include=FALSE, message=FALSE, warning=FALSE}
+# create bibtex with references
+refs <- knitr::write_bib(x = .packages(), file = "r-packages.bib")
+```
