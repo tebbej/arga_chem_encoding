@@ -1,5 +1,9 @@
 # Code for the manuscript on how MHC class II genotype does not contribute towards the chemical encoding of heterozygosity and relatedness in a wild vertebrate
 
+
+[![DOI](https://zenodo.org/badge/614843865.svg)](https://zenodo.org/badge/latestdoi/614843865)
+
+
 ___
 
 ## Overview
