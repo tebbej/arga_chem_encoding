@@ -891,7 +891,7 @@ ggplot(data = scent_nmds,aes(MDS1,MDS2, color = clr, shape = shp)) +
   )
 
 # save output
-ggsave(filename = "figures/genotype_pairs_nmds.png", 
+ggsave(filename = "figures/supplementary_figure1.png", 
        width = 32, height = 16, 
        units = "cm", dpi = 400)
 
@@ -916,7 +916,7 @@ panel_final
 
 
 # save high resolution
-ggsave(filename = "figures/final_panel.png",
+ggsave(filename = "figures/figure2.png",
        panel_final,dpi = 400, 
        width = 33.97, height = 31.04, 
        units = "cm",
