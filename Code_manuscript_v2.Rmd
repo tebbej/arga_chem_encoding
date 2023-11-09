@@ -96,6 +96,13 @@ if (!require("partR2", quietly = TRUE)) {
   library(partR2) # tools for models
 }
 
+if (!require("pwr", quietly = TRUE)) {
+  install.packages("pwr")
+  library(pwr)
+} else {
+  library(pwr) # tools for power detection
+}
+
 if (!require("ggbeeswarm", quietly = TRUE)) {
   install.packages("ggbeeswarm")
   library(ggbeeswarm)
@@ -711,7 +718,14 @@ Neither model, performs noticeably better, and by VIC both models (with and with
 check_model(a4)
 ```
 
-
+#### Power analysis
+```{r}
+# 1540 samples, 
+# number of coefficients = 4, 
+# coefficients minus Intercept = 3
+pwr_a <- pwr.f2.test(v = 1540, u = 3, f2 = 0.1439/(1-0.1439), sig.level = 0.05)
+pwr_a
+```
 
 ## Model relationship between chemical diversity and mhc plus msats diversity
 ### update data frame with meta data
@@ -850,6 +864,23 @@ compare_performance(b1, b2, b3, b4, rank = T) %>% arrange(Name)
 
 summary(b2)
 ```
+
+Check model fit
+
+```{r, fig.width=8.3 , fig.height=11.7}
+
+check_model(b2)
+
+```
+#### Power analysis
+```{r}
+# 56 samples, 
+# number of coefficients = 4, 
+# coefficients minus Intercept = 3
+pwr_b <- pwr.f2.test(v = 56, u = 3, f2 = 0.1168/(1-0.1168), sig.level = 0.05) 
+pwr_b
+```
+
 Correlate zygosity effects
 
 ```{r}
