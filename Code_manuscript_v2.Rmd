@@ -96,13 +96,6 @@ if (!require("partR2", quietly = TRUE)) {
   library(partR2) # tools for models
 }
 
-if (!require("pwr", quietly = TRUE)) {
-  install.packages("pwr")
-  library(pwr)
-} else {
-  library(pwr) # tools for power detection
-}
-
 if (!require("ggbeeswarm", quietly = TRUE)) {
   install.packages("ggbeeswarm")
   library(ggbeeswarm)
@@ -718,14 +711,7 @@ Neither model, performs noticeably better, and by VIC both models (with and with
 check_model(a4)
 ```
 
-#### Power analysis
-```{r}
-# 1540 samples, 
-# number of coefficients = 4, 
-# coefficients minus Intercept = 3
-pwr_a <- pwr.f2.test(v = 1540, u = 3, f2 = 0.1439/(1-0.1439), sig.level = 0.05)
-pwr_a
-```
+
 
 ## Model relationship between chemical diversity and mhc plus msats diversity
 ### update data frame with meta data
@@ -864,23 +850,6 @@ compare_performance(b1, b2, b3, b4, rank = T) %>% arrange(Name)
 
 summary(b2)
 ```
-
-Check model fit
-
-```{r, fig.width=8.3 , fig.height=11.7}
-
-check_model(b2)
-
-```
-#### Power analysis
-```{r}
-# 56 samples, 
-# number of coefficients = 4, 
-# coefficients minus Intercept = 3
-pwr_b <- pwr.f2.test(v = 56, u = 3, f2 = 0.1168/(1-0.1168), sig.level = 0.05) 
-pwr_b
-```
-
 Correlate zygosity effects
 
 ```{r}
@@ -1326,6 +1295,37 @@ print(
     "% of colony similarity"))
 
 ```
+
+### cumulative contribution plot
+
+```{r}
+
+# contribution that's already ordered for cumulative sum of best contributing 
+contribution_cusum <- simp_colony$FWB_SSB$cusum %>% as.vector()
+
+max_on_15 <- contribution_cusum[15]
+
+plot_simper_cusum_df <- data.frame(cusum = contribution_cusum, 
+                                  pos = 1:length(contribution_cusum))
+
+plot_simper_cusum <- ggplot(data = plot_simper_cusum_df, 
+                            aes(x = pos, 
+                                y = cusum)) + 
+  geom_point() +
+  geom_vline(xintercept = 15, linetype = "dashed") +
+  geom_hline(yintercept = max_on_15, linetype = "dashed") + 
+  labs(x = "\nSubstances in SIMPER", 
+       y = "Cumulative sum") +
+  custom_theme
+plot_simper_cusum
+
+ggsave("figures/supplementary_figure2.png", dpi = 400, 
+       plot = plot_simper_cusum)
+
+```
+
+
+
 
 ### adjust scent matrix, include only 15 most explanatory compounds 
 ```{r}
