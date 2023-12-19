@@ -1,6 +1,9 @@
 ---
-title: "RCode - MHC class II genotype does not contribute towards the chemical encoding of heterozygosity and relatedness in a wild vertebrate population"
-author: "J. Tebbe"
+title: "RCode - No evidence for a role of MHC class II genotype in the chemical encoding of heterozygosity and relatedness in Antarctic fur seals^[doi:10.1098/rspb.2023.2519]"
+
+author:
+- "Jonas Tebbe^[Department of Evolutionary Population Genetics, Center for Biotechnology, Bielefeld University, 33615 Bielefeld, Germany\n, Department of Behavioural Ecology, Bielefeld University, 33501 Bielefeld, Germany\nDepartment of Animal Behaviour, Bielefeld University, 33501 Bielefeld, Germany]"
+
 date: "`r format(Sys.time(), '%d/%m/%y')`"
 output: pdf_document
 bibliography: r-packages.bib
@@ -992,7 +995,8 @@ r2_ufrac <- sapply(1:length(sim_r2_btrap_res), function(i) sim_r2_btrap_res[[1]]
 group_factor <- c(rep("mhc_het", 1000), 
                   rep("r2_smlh", 1000), 
                   rep("relatedness", 1000), 
-                  rep("ufrac", 1000))
+                  rep("ufrac", 1000)) %>% 
+  factor(., c("r2_smlh", "mhc_het", "relatedness", "ufrac"))
 
 boot_estimate <- c(r2_mhc_het, 
                    r2_smlh, 
