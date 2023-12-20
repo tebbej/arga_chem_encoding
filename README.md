@@ -12,4 +12,4 @@ Despite ongoing research, little is known about how an individual's genotype is 
 its importance for survival and its involvement in mate choice. With our analysis we try to shed light on the importance of MHC on chemicals in skin swabs of 
 Antarctic fur seals (*Arctozephalus gazella*) compared to the rest of the genomic background. We combinded chemical data with full length MHC DQB II exon 2 sequences 
 and data from 41 genome wide distributed microsatellites. In this repository, we provide all the code used for this analysis in two forms. A pre-executed version 
-`Code_manuscript_v2.pdf` plus the executable markdown `Code_manuscript_v2.Rmd`. 
+`Supplementary_code.pdf` plus the executable markdown `Supplementary_code.Rmd`. 
